@@ -20,7 +20,8 @@ def plot_finali(magnet, density, tempo, Lx, Ly):
     im = ax[1].imshow(density_finale, cmap='viridis', aspect='auto', origin='lower')
     cbar = fig.colorbar(im, ax=ax[1], orientation='vertical')
     ax[1].set_title('Mappa di Densità finale')
-    
+    plt.show()
+
     fig_fin, ax_fin = plt.subplots(1, 3, figsize=(15, 5))
     ax_fin[0].plot(np.mean(magnet_finale,0))
     ax_fin[0].set_title('Magnetizzazione finale media')
@@ -244,3 +245,156 @@ def caratterizzazione_aster(magnet, soglia):
             centroids.append(coordinates)
     
     return areas, centroids
+
+def analisi_temporale_asters(density, soglia_d):
+    aster = heatmap_aster(np.squeeze(density), soglia_d)
+    big = np.tile(aster, (3, 3))
+    caratteristiche = caratterizzazione_aster(big)
+    areas = caratteristiche[0]
+    centroids = caratteristiche[1]
+    num = areas.__len__()
+    return num, areas, centroids
+
+def asters_e_dentro(magnet, soglia, tempo):
+    num_tot = np.zeros(tempo)
+    areas_tot = []
+    for t in range(tempo):
+        num, areas = analisi_temporale_asters(magnet[t,:,:], soglia)
+        num_tot[t] = num
+        areas_tot.append(areas)
+
+    for t in range(tempo):
+        areas_tot[t] = np.array(areas_tot[t])
+    
+    return num_tot, areas_tot
+
+def sitimeno_sitipiu(magnet, soglia):
+    global Lx, Ly
+    asters_finali = heatmap_aster(magnet, soglia)
+    siti_meno = []
+
+    for i in range(Ly):
+        for j in range(Lx):
+            if asters_finali[i][j] < 0:
+               siti_meno.append((i,j))
+
+    siti_piu = []
+
+    for i in range(Ly):
+        for j in range(Lx):
+            if asters_finali[i][j] > 0:
+                siti_piu.append((i,j))
+
+    return siti_meno, siti_piu
+
+def probabilities(magnet, density, metodo_calcolo, x_neo = 0, y_neo = 0):
+    global T, D, gamma
+
+    dt = dt = 1.0 / (4*D + np.exp(1/T))
+    exp = np.zeros(2)
+
+    if metodo_calcolo == 1:
+        exp[0] = - 1/T * magnet/density # calcolato per le particelle spin + 1
+        exp[1] =   1/T * magnet/density # calcolato per le particelle spin -1
+    
+    elif metodo_calcolo == 2:
+        xl = (x_neo - 1) % Lx
+        xr = (x_neo + 1) % Lx
+        yu = (y_neo - 1) % Ly
+        yd = (y_neo + 1) % Ly
+
+        m_center = magnet[y_neo, x_neo] #prendo magnetizzazioni
+        m_left  = magnet[y_neo, xl]
+        m_right = magnet[y_neo, xr]
+        m_up    = magnet[yu, x_neo]
+        m_down  = magnet[yd, x_neo]
+
+        d_center = density[y_neo, x_neo] #prendo densità
+        d_left  = density[y_neo, xl]
+        d_right = density[y_neo, xr]
+        d_up    = density[yu, x_neo]
+        d_down  = density[yd, x_neo]
+
+        num = ((1 - gamma)*m_left
+                         + (1 + 2*gamma)*m_right
+                         + (1 - gamma/2)*m_up
+                         + (1 - gamma/2)*m_down
+                         + m_center)
+        den = ((1 - gamma)*d_left
+                         + (1 + 2*gamma)*d_right
+                         + (1 - gamma/2)*d_up
+                         + (1 - gamma/2)*d_down
+                         + d_center)
+    
+        exp[0] = - 1/T * num/den
+    
+        num = ((1 - gamma)*m_right
+                         + (1 + 2*gamma)*m_left
+                         + (1 - gamma/2)*m_up
+                         + (1 - gamma/2)*m_down
+                         + m_center)
+        den = ((1 - gamma)*d_right
+                         + (1 + 2*gamma)*d_left
+                         + (1 - gamma/2)*d_up
+                         + (1 - gamma/2)*d_down
+                         + d_center)
+    
+        exp[1] = 1/T * num/den
+
+    elif metodo_calcolo == 3:
+        xl = (x_neo - 1) % Lx
+        xr = (x_neo + 1) % Lx
+        yu = (y_neo - 1) % Ly
+        yd = (y_neo + 1) % Ly
+
+        num = (1 - 4*gamma) * magnet[y_neo, x_neo] \
+            + gamma * (magnet[y_neo, xl] + magnet[y_neo, xr] \
+            + magnet[yu, x_neo] + magnet[yd, x_neo])
+        den = (1 - 4*gamma) * density[y_neo, x_neo] \
+            + gamma * (density[y_neo, xl] + density[y_neo, xr] \
+            + density[yu, x_neo] + density[yd, x_neo])
+        exp[0] = - 1/T * num/den
+        exp[1] = 1/T * num/den
+
+    return np.exp(exp)*dt
+
+
+def print_probabilities(magnet, density, soglia, metodo_calcolo, x_neo = 0, y_neo = 0):
+
+    global Lx, Ly, T, D, gamma
+    
+    rate_flip_meno = []
+    rate_flip_piu = []
+
+    siti_meno, siti_piu = sitimeno_sitipiu(magnet, soglia)
+    where_asters = heatmap_aster(magnet, soglia)
+    aster_finali_m= where_asters*magnet
+    aster_finali_d = where_asters*density
+
+    for i in range(Ly):
+        for j in range(Lx):
+        
+            if (i,j) in siti_meno and aster_finali_d[i][j] != 0:
+                rate_flip_meno.append(probabilities(aster_finali_m, aster_finali_d, j,i))
+        
+            elif (i,j) in siti_piu and aster_finali_d[i][j] != 0:
+                rate_flip_piu.append(probabilities(aster_finali_m, aster_finali_d, j,i))
+        
+            else:
+                pass
+
+    rate_flip_meno = np.array(rate_flip_meno)
+    rate_flip_piu = np.array(rate_flip_piu)
+
+    rate_flip_meno_std = np.std(rate_flip_meno, axis = 0)/np.sqrt(rate_flip_piu.shape[0]) #std sulla media, divido per sqrt(N)
+    rate_flip_piu_std = np.std(rate_flip_piu, axis = 0)/np.sqrt(rate_flip_piu.shape[0])
+
+    rate_flip_meno = np.mean(rate_flip_meno, axis = 0)
+    rate_flip_piu = np.mean(rate_flip_piu, axis = 0)
+
+    print(f'Probabilità(+ --> -) in siti con magnetizzazione negativa: {rate_flip_meno[0]:.2%} +/- {rate_flip_meno_std[0]:.2%}'),
+    print(f'Probabilità(+ --> -) in siti con magnetizzazione positiva: {rate_flip_piu[0]:.4%} +/- {rate_flip_piu_std[0]:.6%}')
+    print(f'Probabilità(- --> +) in siti con magnetizzazione negativa: {rate_flip_meno[1]:.4%} +/- {rate_flip_meno_std[1]:.6%}')
+    print(f'Probabilità(- --> +) in siti con magnetizzazione positiva: {rate_flip_piu[1]:.2%} +/- {rate_flip_piu_std[1]:.2%}')
+
+    return rate_flip_meno, rate_flip_meno_std, rate_flip_piu, rate_flip_piu_std
