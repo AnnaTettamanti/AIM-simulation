@@ -246,8 +246,8 @@ def caratterizzazione_aster(magnet, soglia):
     
     return areas, centroids
 
-def analisi_temporale_asters(density, soglia_d):
-    aster = heatmap_aster(np.squeeze(density), soglia_d)
+def analisi_temporale_asters(magnet, soglia):
+    aster = heatmap_aster(np.squeeze(magnet), soglia)
     big = np.tile(aster, (3, 3))
     caratteristiche = caratterizzazione_aster(big)
     areas = caratteristiche[0]
@@ -359,7 +359,7 @@ def probabilities(magnet, density, metodo_calcolo, x_neo = 0, y_neo = 0):
     return np.exp(exp)*dt
 
 
-def print_probabilities(magnet, density, soglia, metodo_calcolo, x_neo = 0, y_neo = 0):
+def print_probabilities(magnet, density, soglia, metodo_calcolo):
 
     global Lx, Ly, T, D, gamma
     
@@ -375,10 +375,10 @@ def print_probabilities(magnet, density, soglia, metodo_calcolo, x_neo = 0, y_ne
         for j in range(Lx):
         
             if (i,j) in siti_meno and aster_finali_d[i][j] != 0:
-                rate_flip_meno.append(probabilities(aster_finali_m, aster_finali_d, j,i))
+                rate_flip_meno.append(probabilities(aster_finali_m, aster_finali_d, metodo_calcolo, x_neo= j, y_neo = i))
         
             elif (i,j) in siti_piu and aster_finali_d[i][j] != 0:
-                rate_flip_piu.append(probabilities(aster_finali_m, aster_finali_d, j,i))
+                rate_flip_piu.append(probabilities(aster_finali_m, aster_finali_d, metodo_calcolo, x_neo= j, y_neo = i))
         
             else:
                 pass
@@ -398,3 +398,25 @@ def print_probabilities(magnet, density, soglia, metodo_calcolo, x_neo = 0, y_ne
     print(f'Probabilità(- --> +) in siti con magnetizzazione positiva: {rate_flip_piu[1]:.2%} +/- {rate_flip_piu_std[1]:.2%}')
 
     return rate_flip_meno, rate_flip_meno_std, rate_flip_piu, rate_flip_piu_std
+
+def tempo_una_banda(magnet, soglia, t0 = 0):
+    num_tot, areas_tot = asters_e_dentro(magnet, soglia, magnet.shape[0])
+    
+    for t in range(t0, magnet.shape[0]):
+        if areas_tot[t] == 1 and np.sum(areas_tot[t:]) == np.len(areas_tot[t:]):
+            return t
+
+
+## ANALISI PER BANDE
+def autocorrelazione(vettore, k_max):
+    "Funzione per calcolo autocorrelazione di un vettore"
+    vettore_correlazione = np.zeros(k_max+1)
+    len_vettore = len(vettore)
+
+    for k in range(k_max+1):
+        for i in range(len_vettore):
+            vettore_correlazione[k] += (vettore[i]) * (vettore[(i+k) % (len_vettore)])
+
+    vettore_correlazione /= vettore_correlazione[0]
+
+    return vettore_correlazione
