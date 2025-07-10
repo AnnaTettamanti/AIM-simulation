@@ -145,7 +145,7 @@ from skimage.measure import label, regionprops
 @njit
 def dentro_aster(magnet, soglia):
     "Considera che deve avere almeno un vicino con magnetizzazione sopra la soglia"
-    global Lx, Ly
+    Ly, Lx = magnet.shape
     dentro = 0
     for i in range(Ly):
         for j in range(Lx):
@@ -170,7 +170,7 @@ def dentro_aster(magnet, soglia):
 
 @njit
 def heatmap_aster(magnet, soglia):
-    global Lx, Ly
+    Ly, Lx = magnet.shape
     dentro = np.zeros((Ly, Lx),dtype=np.int32)
     for i in range(Ly):
         for j in range(Lx):
@@ -199,17 +199,15 @@ def evoluzione_dentro(magnet, soglia, tempo):
     for t in range(tempo):
         dentro[t] = dentro_aster(np.squeeze(magnet[t,:,:]), soglia)
     plt.plot(dentro)
-    plt.yscale('log')
+    #plt.yscale('log')
     plt.show()
 
 
-
 def caratterizzazione_aster(magnet, soglia):
-    global Ly, Lx
+    Ly, Lx = magnet.shape
     
     asters = heatmap_aster(magnet,soglia)
     big = np.tile(asters, (3, 3))
-    big = np.tile(big.astype(np.uint8), (3, 3))
     
     labels_big = label(big, connectivity=2)
     props = regionprops(labels_big)
@@ -217,7 +215,6 @@ def caratterizzazione_aster(magnet, soglia):
     areas = []
     centroids = []
 
-    
     # 4) Ciclo su ciascuna regione “reg” in props
     for reg in props:
         y0, x0 = reg.centroid
@@ -246,31 +243,40 @@ def caratterizzazione_aster(magnet, soglia):
     
     return areas, centroids
 
-def analisi_temporale_asters(magnet, soglia):
-    aster = heatmap_aster(np.squeeze(magnet), soglia)
-    big = np.tile(aster, (3, 3))
-    caratteristiche = caratterizzazione_aster(big)
-    areas = caratteristiche[0]
-    centroids = caratteristiche[1]
-    num = areas.__len__()
-    return num, areas, centroids
+def asters_over_time(magnet, soglia):
+    """
+    Parametri
+    ---------
+    magnet : ndarray, shape (T, Ly, Lx)
+        Serie temporale del campo da analizzare.
+    soglia : float
+        Soglia assoluta per definire i cluster.
 
-def asters_e_dentro(magnet, soglia, tempo):
-    num_tot = np.zeros(tempo)
-    areas_tot = []
-    for t in range(tempo):
-        num, areas = analisi_temporale_asters(magnet[t,:,:], soglia)
-        num_tot[t] = num
-        areas_tot.append(areas)
-
-    for t in range(tempo):
-        areas_tot[t] = np.array(areas_tot[t])
-    
-    return num_tot, areas_tot
+    Ritorna
+    -------
+    num_clusters : ndarray, shape (T,)
+        Numero di cluster trovati in ciascun frame.
+    areas_list : list of ndarray
+        Per ogni frame t, array delle aree dei cluster.
+    centroids_list : list of list of (y, x)
+        Per ogni frame t, lista delle coordinate dei centroidi.
+    """
+    T, Ly, Lx = magnet.shape
+    num_clusters = np.zeros(T, dtype=int)
+    areas_list = []
+    centroids_list = []
+    for t in range(T):
+        areas, cents = caratterizzazione_aster(magnet[t], soglia)
+        num_clusters[t] = len(areas)
+        areas_list.append(np.array(areas, dtype=int))
+        centroids_list.append(cents)
+    return num_clusters, areas_list, centroids_list
 
 def sitimeno_sitipiu(magnet, soglia):
-    global Lx, Ly
-    asters_finali = heatmap_aster(magnet, soglia)
+    Ly, Lx = magnet.shape
+    
+    asters_finali = heatmap_aster(magnet, soglia) * magnet
+    
     siti_meno = []
 
     for i in range(Ly):
@@ -287,15 +293,14 @@ def sitimeno_sitipiu(magnet, soglia):
 
     return siti_meno, siti_piu
 
-def probabilities(magnet, density, metodo_calcolo, x_neo = 0, y_neo = 0):
-    global T, D, gamma
-
-    dt = dt = 1.0 / (4*D + np.exp(1/T))
+def probabilities(magnet, density, T, gamma, D = 1, metodo_calcolo = 1, x_neo = 0, y_neo = 0):
+    Ly, Lx = magnet.shape
+    dt = 1.0 / (4*D + np.exp(1/T))
     exp = np.zeros(2)
 
     if metodo_calcolo == 1:
-        exp[0] = - 1/T * magnet/density # calcolato per le particelle spin + 1
-        exp[1] =   1/T * magnet/density # calcolato per le particelle spin -1
+        exp[0] = - 1/T * magnet[y_neo, x_neo]/density[y_neo, x_neo] # calcolato per le particelle spin + 1
+        exp[1] =   1/T * magnet[y_neo, x_neo]/density[y_neo, x_neo] # calcolato per le particelle spin -1
     
     elif metodo_calcolo == 2:
         xl = (x_neo - 1) % Lx
@@ -353,33 +358,33 @@ def probabilities(magnet, density, metodo_calcolo, x_neo = 0, y_neo = 0):
         den = (1 - 4*gamma) * density[y_neo, x_neo] \
             + gamma * (density[y_neo, xl] + density[y_neo, xr] \
             + density[yu, x_neo] + density[yd, x_neo])
+        
         exp[0] = - 1/T * num/den
         exp[1] = 1/T * num/den
 
     return np.exp(exp)*dt
 
 
-def print_probabilities(magnet, density, soglia, metodo_calcolo):
-
-    global Lx, Ly, T, D, gamma
+def print_probabilities(magnet, density, soglia, T, gamma, D = 1, metodo_calcolo = 1):
+    Ly, Lx = magnet.shape
     
     rate_flip_meno = []
     rate_flip_piu = []
 
     siti_meno, siti_piu = sitimeno_sitipiu(magnet, soglia)
     where_asters = heatmap_aster(magnet, soglia)
-    aster_finali_m= where_asters*magnet
+    
+    aster_finali_m = where_asters*magnet
     aster_finali_d = where_asters*density
 
     for i in range(Ly):
         for j in range(Lx):
         
             if (i,j) in siti_meno and aster_finali_d[i][j] != 0:
-                rate_flip_meno.append(probabilities(aster_finali_m, aster_finali_d, metodo_calcolo, x_neo= j, y_neo = i))
+                rate_flip_meno.append(probabilities(aster_finali_m, aster_finali_d, T, gamma, D, metodo_calcolo, x_neo = j, y_neo = i))
         
             elif (i,j) in siti_piu and aster_finali_d[i][j] != 0:
-                rate_flip_piu.append(probabilities(aster_finali_m, aster_finali_d, metodo_calcolo, x_neo= j, y_neo = i))
-        
+                rate_flip_piu.append(probabilities(aster_finali_m, aster_finali_d, T, gamma, D, metodo_calcolo, x_neo = j, y_neo = i))
             else:
                 pass
 
@@ -399,12 +404,136 @@ def print_probabilities(magnet, density, soglia, metodo_calcolo):
 
     return rate_flip_meno, rate_flip_meno_std, rate_flip_piu, rate_flip_piu_std
 
-def tempo_una_banda(magnet, soglia, t0 = 0):
-    num_tot, areas_tot = asters_e_dentro(magnet, soglia, magnet.shape[0])
-    
-    for t in range(t0, magnet.shape[0]):
-        if areas_tot[t] == 1 and np.sum(areas_tot[t:]) == np.len(areas_tot[t:]):
+def tempo_una_banda(magnet, soglia, t0=0):
+    """
+    Trova il primo istante t ≥ t0 a partire dal quale c'è sempre esattamente
+    una sola banda (“aster”) attiva in ciascun frame.
+
+    Parametri
+    ---------
+    magnet : ndarray, shape (T, Ly, Lx)
+        Serie temporale dei campi di magnetizzazione.
+    soglia : float
+        Soglia assoluta su |magnet| per definire un sito “dentro” l’aster.
+    t0 : int, opzionale
+        Istante di partenza della ricerca (default=0).
+
+    Ritorna
+    -------
+    t_unica_banda : int
+        Il primo frame t ≥ t0 tale che
+          1) num_tot[t] == 1  (una sola banda)
+          2) num_tot[k] == 1 per tutti k ≥ t
+        Se non esiste, ritorna T (numero di frame).
+    """
+    # num_tot[t] = numero di bande in frame t
+    num_tot, _, _ = asters_over_time(magnet, soglia)
+
+    T = magnet.shape[0]
+    for t in range(t0, T):
+        # Condizione: esattamente 1 banda a t e sempre 1 da t in poi
+        if num_tot[t] == 1 and np.all(num_tot[t:] == 1):
             return t
+    return T
+
+
+def tempo_un_aster(magnet, soglia, t0=0):
+    """
+    Dopo che il sistema si è ridotto a una sola banda (tempo t1),
+    trova il primo istante t ≥ t1 in cui esiste almeno una colonna
+    (asse x costante) completamente occupata dall’aster.
+
+    Parametri
+    ---------
+    magnet : ndarray, shape (T, Ly, Lx)
+        Serie temporale dei campi di magnetizzazione.
+    soglia : float
+        Soglia assoluta su |magnet| per definire un sito “dentro” l’aster.
+    t0 : int, opzionale
+        Istante di partenza per la ricerca della banda unica (default=0).
+
+    Ritorna
+    -------
+    t_colonna_piena : int
+        Il primo frame t ≥ t1 in cui esiste almeno una colonna i
+        tale che heatmap_aster(magnet[t], soglia)[:, i] sia tutta True.
+        Se non esiste, ritorna T (numero di frame).
+    """
+    T, Ly, Lx = magnet.shape
+
+    # 1) Trova t1: il tempo di comparsa di una sola banda
+    t1 = tempo_una_banda(magnet, soglia, t0)
+
+    # 2) A partire da t1, cerco il primo frame con una colonna interamente piena
+    for t in range(t1, T):
+        mappa = heatmap_aster(magnet[t], soglia)  # bool array (Ly, Lx)
+        # Controllo se c'è almeno una colonna piena
+        colonne_piene = np.all(mappa, axis=0)
+        if np.any(colonne_piene):
+            return t
+
+    return T
+
+def build_log_indices(t_max, n_frames):
+    """
+    Ritorna un array di interi (di tipo int64) che rappresentano i tempi 
+    (fra 0 e t_max-1) in cui salvare un frame, distribuiti (approssimativamente) in scala logaritmica.
+    """
+    # Genera n_frames valori equispaziati in scala log da 1 a t_max
+    floats = np.logspace(np.log10(1), np.log10(t_max), n_frames)
+    # Arrotondi all'intero più vicino e converti a int
+    ints = np.round(floats).astype(np.int64)
+    # Rimuovi eventuali duplicati e ordina
+    unique_ints = np.unique(ints)
+    # Sposta 1→0-based se necessario (se preferisci avere tutto tra 0 e t_max-1)
+    unique_ints = np.clip(unique_ints - 1, 0, t_max - 1)
+    return unique_ints
+
+
+
+def tempo_fisico(frame_idx, t_max, n_frames, T, D=1.0):
+    """
+    Calcola il tempo fisico corrispondente al frame salvato #frame_idx, 
+    quando i frame sono selezionati in scala logaritmica da 0 a t_max-1.
+
+    Parametri
+    ---------
+    frame_idx : int
+        Indice (0-based) nel vettore dei frame salvati (deve valere 0 <= frame_idx < n_frames).
+    t_max : int
+        Numero totale di passi di simulazione (frame numerati da 0 a t_max-1).
+    n_frames : int
+        Numero di snapshot che si sono salvati (quanti indici restituisce build_log_indices).
+    T : float
+        Temperatura fisica (usata per calcolare Δt).
+    D : float, opzionale
+        Coefficiente di diffusione, default: 1.0 (come nel paper).
+
+    Ritorna
+    -------
+    t_phys : float
+        Tempo fisico corrispondente al frame #frame_idx.
+    """
+
+    # 1) Costruisci gli indici log-spaced
+    floats = np.logspace(np.log10(1), np.log10(t_max), n_frames)
+    ints = np.round(floats).astype(np.int64)
+    unique = np.unique(ints)
+    frame_indices = np.clip(unique - 1, 0, t_max - 1)
+
+    # 2) Controllo che frame_idx sia valido
+    if not (0 <= frame_idx < len(frame_indices)):
+        raise IndexError(f"frame_idx deve essere in [0, {len(frame_indices)-1}]")
+
+    # 3) Calcola Δt come nel paper
+    beta = 1.0 / T
+    delta_t = 1.0 / (4 * D + np.exp(beta))
+
+    # 4) Calcola il tempo fisico
+    t_step = frame_indices[frame_idx]
+    t_phys = t_step * delta_t
+
+    return t_phys
 
 
 ## ANALISI PER BANDE
@@ -417,6 +546,7 @@ def autocorrelazione(vettore, k_max):
         for i in range(len_vettore):
             vettore_correlazione[k] += (vettore[i]) * (vettore[(i+k) % (len_vettore)])
 
-    vettore_correlazione /= vettore_correlazione[0]
+    vettore_correlazione = vettore_correlazione[0]
 
     return vettore_correlazione
+
