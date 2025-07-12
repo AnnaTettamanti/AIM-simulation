@@ -428,6 +428,8 @@ def evoluzione_scorporata(Lx, Ly, D, epsilon,
     
     return frames_d, frames_m, order_param
 
+
+
 @njit
 def evoluzione_track(Lx, Ly, D, epsilon,
                                beta, particles, t_max, gamma, metodo_calcolo, array, n_track = 0):
@@ -539,4 +541,126 @@ def evoluzione_track(Lx, Ly, D, epsilon,
             track[:, i] = particles[:n_track, :]
     
     return frames_d, frames_m, order_param, track
+
+@njit
+def evoluzione_convergenza(magnet, density, D, epsilon,
+                               beta, effective_frames_iniziale, t_max, t_min, array, gamma, metodo_calcolo):
+    """
+    Simula l’evoluzione temporale e restituisce profili medi e il parametro d'ordine al variare del tempo
+    - Lx, Ly taglia del sistema
+    - D = coefficiente di diffusione
+    - epsilon = grado di propulsione della singola particella
+    - beta = temperatura inversa
+    - particles = matrice delle proprietà delle particelle da misurare
+    - t_max = tempo massimo di campionamento
+    - gamma = se metodo_calcolo = 1 (AIM STANDARD) indifferente
+                                = 2 (METODO DEI VICINI) livello di bias asimmetrico
+                                = 3 (METODO PICCOLE INTERAZIONI LOCALI SIMMETRICHE) grado di non località 
+    - metodo calcolo = 1 (AIM STANDARD)
+                     = 2 (METODO DEI VICINI)
+                     = 3 (METODO PICCOLE INTERAZIONI LOCALI SIMMETRICHE)
+    - array = array di interi che contiene i tempi in cui salvare i frame
+    - n_track = numero di particelle da tracciare nel tempo (se 0, non traccio nessuna particella)
+    """
+
+    dt = 1.0 / (4*D + np.exp(beta))
+    effective_frames_finale = np.size(array)
+    old_frames = 0
+    frames_idx = 0
+
+    Ly, Lx = magnet.shape[0]
+    n = np.sum(density)/(Lx*Ly)
+    
+
+    frames_d = np.zeros((effective_frames_finale, Ly, Lx), np.float64)
+    frames_m = np.zeros((effective_frames_finale, Ly, Lx), np.float64)
+
+    # Riempi array proprietà particelle
+    particles = np.empty((n,3), dtype=np.int64)
+
+    
+    for i in range(Ly):                 # Scorro tutte le righe (y) della griglia
+        for j in range(Lx):             # Scorro tutte le colonne (x) della griglia
+            count = 0                   # Reset del contatore di particelle inserite in questo sito
+            for s in [-1, 1]:           # Considero due valori di spin
+                num_particles = int((density[i, j] + s * magnet[i, j]) // 2)
+                for _ in range(num_particles):      # Per ciascuna particella di quel tipo
+                    if count < n:                   # Finché non superi la capienza n del sito
+                        particles[count, 0] = j    # Salva la coordinata x (colonna)
+                        particles[count, 1] = i    # Salva la coordinata y (riga)
+                        particles[count, 2] = s    # Salva lo spin (+1 o -1)
+                        count += 1                 # Incrementa il contatore interno
+
+    for i in range(effective_frames_iniziale):
+        frames_d[i,:,:] = magnet[i,:,:]
+        frames_m[i,:,:] = density[i,:,:]
+        old_frames += 1
+        frames_idx += 1
+
+    for i in range(t_max-t_min):
+        # ciclo sulle particelle 
+        for _ in range(n):
+
+            neo = np.random.randint(0, n) #a ogni ciclo estraggo particella a caso
+            x_neo, y_neo, s_neo = particles[neo] #e prendo la proprietà di questa particella
+
+            # flip spin chiamando rateflip
+            w = np.exp(rateflip_numba(Lx, Ly, metodo_calcolo,
+                                      x_neo, y_neo, s_neo,
+                                      beta, gamma,
+                                      magnet, density))
+            
+            r =  np.random.random()
+
+            if r < w * dt: #flip dello spin?
+                # aggiorna vettore particelle e matrice magnet
+                particles[neo, 2] = -s_neo
+                magnet[y_neo, x_neo] -= 2 * s_neo 
+            
+            elif r < (w + D)*dt: #DOWN
+                new_y = (y_neo + 1) % Ly #variabile temporanea stando attenta a condizioni al contorno
+                
+                density[y_neo, x_neo] -= 1
+                magnet [y_neo, x_neo] -= s_neo
+                density[new_y, x_neo] += 1
+                magnet [new_y, x_neo] += s_neo
+                particles[neo, 1] = new_y
+            
+            elif r < (w + 2*D)*dt: #UP
+                new_y = (y_neo - 1) % Ly #variabile temporanea stando attenta a condizioni al contorno
+
+                density[y_neo, x_neo] -= 1
+                magnet [y_neo, x_neo] -= s_neo
+                density[new_y, x_neo] += 1
+                magnet [new_y, x_neo] += s_neo
+                particles[neo, 1] = new_y
+                y_neo = new_y
+            
+            elif r < (w +D*(3+epsilon*s_neo))*dt: #RIGHT
+                new_x = (x_neo + 1) % Lx #variabile temporanea stando attenta a condizioni al contorno
+
+                density[y_neo, x_neo] -= 1
+                magnet [y_neo, x_neo] -= s_neo
+                density[y_neo, new_x] += 1
+                magnet [y_neo, new_x] += s_neo
+                particles[neo, 0] = new_x
+
+            elif r < (w+4*D)*dt: #LEFT
+                new_x = (x_neo - 1) % Lx #variabile temporanea stando attenta a condizioni al contorno
+
+                density[y_neo, x_neo] -= 1
+                magnet [y_neo, x_neo] -= s_neo
+                density[y_neo, new_x] += 1
+                magnet [y_neo, new_x] += s_neo
+                particles[neo, 0] = new_x
+        
+        for j in range(effective_frames_finale):
+            if i == array[j + old_frames]:
+                frames_d[frame_idx,:,:] = density
+                frames_m[frame_idx,:,:] = magnet
+                frame_idx += 1
+    
+    return frames_d, frames_m
+
+
 

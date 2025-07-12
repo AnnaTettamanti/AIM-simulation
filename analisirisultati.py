@@ -114,7 +114,7 @@ def istogrammi_soglia(magnet, density, prime_immagini=50):
     # 4.2) Istogramma magnetizzazione media prime 10 immagini
     bins_mag10 = np.arange(np.min(flat_mag_first), np.max(flat_mag_first) + 1) - 0.5
     ax[1, 0].hist(flat_mag_first, bins=bins_mag10, color='blue', density=True)
-    ax[1, 0].axvline(soglia_m2, color='red', linestyle='--', label='Soglia media 10')
+    ax[1, 0].axvline(soglia_m2, color='red', linestyle='--', label=f'Soglia media {prime_immagini}')
     ax[1, 0].set_title(f'Istogramma mag. media prime {prime_immagini}')
     ax[1, 0].legend()
 
@@ -128,7 +128,7 @@ def istogrammi_soglia(magnet, density, prime_immagini=50):
     # 4.4) Istogramma densità media prime 10 immagini
     bins_den10 = np.arange(np.min(flat_density_first), np.max(flat_density_first) + 1) - 0.5
     ax[1, 1].hist(flat_density_first, bins=bins_den10, color='green', density=True)
-    ax[1, 1].axvline(soglia_d2, color='red', linestyle='--', label='Soglia media 10')
+    ax[1, 1].axvline(soglia_d2, color='red', linestyle='--', label=f'Soglia media {prime_immagini}')
     ax[1, 1].set_title(f'Istogramma densità media prime {prime_immagini}')
     ax[1, 1].legend()
 
@@ -372,6 +372,11 @@ def print_probabilities(magnet, density, soglia, T, gamma, D = 1, metodo_calcolo
     rate_flip_piu = []
 
     siti_meno, siti_piu = sitimeno_sitipiu(magnet, soglia)
+
+    if len(siti_meno) == 0 or len(siti_piu) == 0:
+        print("Non ci sono siti con magnetizzazione negativa o positiva.")
+        return None, None, None, None
+
     where_asters = heatmap_aster(magnet, soglia)
     
     aster_finali_m = where_asters*magnet
@@ -403,6 +408,58 @@ def print_probabilities(magnet, density, soglia, T, gamma, D = 1, metodo_calcolo
     print(f'Probabilità(- --> +) in siti con magnetizzazione positiva: {rate_flip_piu[1]:.2%} +/- {rate_flip_piu_std[1]:.2%}')
 
     return rate_flip_meno, rate_flip_meno_std, rate_flip_piu, rate_flip_piu_std
+
+def approssimazioni(magnet, density, soglia, T):
+    Ly, Lx = magnet.shape
+    beta = 1/T
+    mappa = heatmap_aster(magnet, soglia)
+    
+    x_fuori = []
+    x_dentro = []
+    
+    if sum(mappa.flatten()) == 0:
+        x_dentro = [0,0]
+        print("Non ci sono siti dentro l'aster, non posso calcolare x")
+
+    for i in range(Ly):
+        for j in range(Lx):
+            
+            if mappa[i][j] != 0 and density[i][j] != 0:
+                m = abs(magnet[i][j])
+                d = density[i][j]
+                x_dentro.append(beta*m/d)
+
+            elif mappa[i][j] == 0 and density[i][j] != 0:
+                m = abs(magnet[i][j])
+                d = density[i][j]
+                
+                x_fuori.append(beta*m/d)
+    
+    x_dentro = np.array(x_dentro)
+    x_fuori = np.array(x_fuori) 
+    
+    x_dentro_std = np.std(x_dentro, axis=0)/np.sqrt(x_dentro.shape[0]) #std sulla media, divido per sqrt(N)
+    x_fuori_std = np.std(x_fuori, axis=0)/np.sqrt(x_fuori.shape[0])
+    
+    x_dentro = np.mean(x_dentro)
+    x_fuori = np.mean(x_fuori)
+
+    print(f'beta*m/d (dentro): {x_dentro:.4f} +/- {x_dentro_std:.6f}')
+    print(f'beta*m/d (fuori): {x_fuori:.4f} +/- {x_fuori_std:.6f}')
+
+    return x_dentro, x_dentro_std, x_fuori, x_fuori_std
+    
+
+def massimo_magnet(magnet):
+    x = 0
+    i_max = 0
+    for i in range(magnet.shape[0]):
+        max_magnet = np.max(np.abs(magnet[i,:,:]))
+        if max_magnet > x:
+            x = max_magnet
+            i_max = i
+    return x, i_max
+
 
 def tempo_una_banda(magnet, soglia, t0=0):
     """
@@ -437,7 +494,7 @@ def tempo_una_banda(magnet, soglia, t0=0):
     return T
 
 
-def tempo_un_aster(magnet, soglia, t0=0):
+def tempo_colonna_piena(magnet, soglia, t0=0):
     """
     Dopo che il sistema si è ridotto a una sola banda (tempo t1),
     trova il primo istante t ≥ t1 in cui esiste almeno una colonna
@@ -470,6 +527,44 @@ def tempo_un_aster(magnet, soglia, t0=0):
         # Controllo se c'è almeno una colonna piena
         colonne_piene = np.all(mappa, axis=0)
         if np.any(colonne_piene):
+            return t
+
+    return T
+
+def tempo_righe_non_vuote(magnet, soglia, t0=0):
+    """
+    Dopo che il sistema si è ridotto a una sola banda (tempo t1),
+    trova il primo istante t ≥ t1 in cui tutte le righe
+    contengono almeno un sito “dentro” l’aster.
+
+    Parametri
+    ---------
+    magnet : ndarray, shape (T, Ly, Lx)
+        Serie temporale dei campi di magnetizzazione.
+    soglia : float
+        Soglia assoluta su |magnet| per definire un sito “dentro” l’aster.
+    t0 : int, opzionale
+        Istante di partenza per la ricerca della banda unica (default=0).
+
+    Ritorna
+    -------
+    t_righe_non_vuote : int
+        Il primo frame t ≥ t1 in cui **ogni** riga j ha almeno un
+        elemento True in heatmap_aster(magnet[t], soglia)[j, :].
+        Se non esiste, ritorna T (numero di frame).
+    """
+    T, Ly, Lx = magnet.shape
+
+    # 1) Trova t1: il tempo in cui compare una sola banda
+    t1 = tempo_una_banda(magnet, soglia, t0)
+
+    # 2) A partire da t1, cerco il primo frame in cui tutte le righe sono non-vuote
+    for t in range(t1, T):
+        mappa = heatmap_aster(magnet[t], soglia)  # bool array (Ly, Lx)
+        # np.any(mappa, axis=1) è un array di lunghezza Ly: True se la riga ha almeno un True
+        righe_non_vuote = np.any(mappa, axis=1)
+        # Controllo che tutte le righe siano non-vuote
+        if np.all(righe_non_vuote):
             return t
 
     return T
