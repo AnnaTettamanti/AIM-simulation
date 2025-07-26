@@ -4,33 +4,29 @@ import numpy as np
 from scipy.io import savemat
 import matplotlib.pyplot as plt
 
-def plot_finali(magnet, density, tempo, Lx, Ly):
+def plot_finali(magnet, density, tempo, L):
     "Plotta le mappe di magnetizzazione e densità finali"
     
-    magnet_finale = magnet[-1, :, :]
+    magnet_finale = magnet[-1, :]
     magnet_finale =  np.squeeze(magnet_finale)
 
-    density_finale = density[-1, :, :]
+    density_finale = density[-1, :]
     density_finale =  np.squeeze(density_finale)
 
     fig, ax = plt.subplots(1, 2, figsize=(15, 5))
-    im = ax[0].imshow(magnet_finale, cmap='viridis', aspect='auto', origin='lower')
-    cbar = fig.colorbar(im, ax=ax[0], orientation='vertical')
+    ax[0].plot(magnet_finale)
     ax[0].set_title('Mappa di Magnetizzazione finale')
-    im = ax[1].imshow(density_finale, cmap='viridis', aspect='auto', origin='lower')
-    cbar = fig.colorbar(im, ax=ax[1], orientation='vertical')
+    ax[1].plot(density_finale)
     ax[1].set_title('Mappa di Densità finale')
+    
     plt.show()
-
-    fig_fin, ax_fin = plt.subplots(1, 3, figsize=(15, 5))
-    ax_fin[0].plot(np.mean(magnet_finale,0))
-    ax_fin[0].set_title('Magnetizzazione finale media')
-    ax_fin[1].plot(np.mean(density_finale,0))
-    ax_fin[1].set_title('Densità finale media')
-    M_site = magnet.reshape(tempo, -1).sum(axis=1) / (Lx * Ly)
-
-    ax_fin[2].plot(np.arange(tempo), M_site)
-    ax_fin[2].set_title('Parametro ordine al variare del tempo')
+    M = np.mean(magnet, axis=1)
+    plt.figure()
+    plt.plot(np.arange(tempo), M)
+    plt.xlabel('Time')
+    plt.ylabel('<m>')
+    plt.title('Order parameter over time')
+    plt.grid(True)
     plt.show()
 
 def istogrammi_soglia(magnet, density, prime_immagini=50):
@@ -70,7 +66,7 @@ def istogrammi_soglia(magnet, density, prime_immagini=50):
     - Stampa a video i valori delle quattro soglie.
     - Mostra a schermo una figura con 4 istogrammi e linee verticali alle soglie.
     """
-    magnet_iniziale = magnet[0, :, :].astype(float)
+    magnet_iniziale = magnet[0, :].astype(float)
     flat_mag0 = magnet_iniziale.flatten()
 
     # 1) Soglia su singola immagine
@@ -79,7 +75,7 @@ def istogrammi_soglia(magnet, density, prime_immagini=50):
     print('Soglia magnetizzazione (solo t=0):', soglia_m)
 
     # 2) Media su prime_immagini immagini e soglia su queste
-    magnet_stack = magnet[0:prime_immagini, :, :].astype(float)   
+    magnet_stack = magnet[0:prime_immagini, :].astype(float)   
     magnet_mean_first = np.mean(magnet_stack, axis=0)                  
     flat_mag_first = magnet_mean_first.flatten()
     std_soglia_m2 = np.std(flat_mag_first)
@@ -87,13 +83,13 @@ def istogrammi_soglia(magnet, density, prime_immagini=50):
     print(f'Soglia magnetizzazione (media prime {prime_immagini}):', soglia_m2)
 
     # 3) Stesso ragionamento per density
-    density_iniziale = density[0, :, :].astype(float)
+    density_iniziale = density[0, :].astype(float)
     flat_den = density_iniziale.flatten()
     std_soglia_d = np.std(flat_den)
     soglia_d = np.mean(flat_den) + 5 * std_soglia_d
     print('Soglia densità (solo t=0):', soglia_d)
 
-    density_stack = density[0:prime_immagini, :, :].astype(float)
+    density_stack = density[0:prime_immagini, :].astype(float)
     density_mean_first = np.mean(density_stack, axis=0)
     flat_density_first = density_mean_first.flatten()
 
@@ -140,202 +136,157 @@ def istogrammi_soglia(magnet, density, prime_immagini=50):
 ## ASTERS
 
 from numba import njit
-from skimage.measure import label, regionprops
 
 @njit
 def dentro_aster(magnet, soglia):
-    "Considera che deve avere almeno un vicino con magnetizzazione sopra la soglia"
-    Ly, Lx = magnet.shape
+    """Considera che deve avere almeno un vicino con magnetizzazione sopra la soglia"""
+    L = magnet.shape[0]
     dentro = 0
-    for i in range(Ly):
-        for j in range(Lx):
-            if abs(magnet[i, j]) >= soglia:
-                has_neighbor = False
-                # nord
-                if abs(magnet[(i - 1) % Ly, j]) >= soglia:
-                    has_neighbor = True
-                # sud
-                elif abs(magnet[(i + 1) % Ly, j]) >= soglia:
-                    has_neighbor = True
-                # ovest
-                elif abs(magnet[i, (j - 1) % Lx]) >= soglia:
-                    has_neighbor = True
-                # est
-                elif abs(magnet[i, (j + 1) % Lx]) >= soglia:
-                    has_neighbor = True
-                if has_neighbor:
-                    dentro += 1
-
+    for i in range(L):
+        if abs(magnet[i]) >= soglia:
+            has_neighbor = False
+            if abs(magnet[(i - 1) % L]) >= soglia:
+                has_neighbor = True
+            elif abs(magnet[(i + 1) % L]) >= soglia:
+                has_neighbor = True
+            if has_neighbor:
+                dentro += 1
     return dentro
 
 @njit
-def heatmap_aster(magnet, soglia):
-    Ly, Lx = magnet.shape
-    dentro = np.zeros((Ly, Lx),dtype=np.int32)
-    for i in range(Ly):
-        for j in range(Lx):
-            if abs(magnet[i, j]) >= soglia:
-                has_neighbor = False
-                # nord
-                if abs(magnet[(i - 1) % Ly, j]) >= soglia:
-                    has_neighbor = True
-                # sud
-                elif abs(magnet[(i + 1) % Ly, j]) >= soglia:
-                    has_neighbor = True
-                # ovest
-                elif abs(magnet[i, (j - 1) % Lx]) >= soglia:
-                    has_neighbor = True
-                # est
-                elif abs(magnet[i, (j + 1) % Lx]) >= soglia:
-                    has_neighbor = True
-                if has_neighbor:
-                    dentro[i][j]= True
-            else:
-               dentro[i][j] = False
-    return dentro
-
-@njit
-def heatmap_number(magnet, density, soglia):
-    Ly, Lx = magnet.shape
-    dentro = 0
-    for i in range(Ly):
-        for j in range(Lx):
-            if abs(magnet[i, j]) >= soglia:
-                has_neighbor = False
-                # nord
-                if abs(magnet[(i - 1) % Ly, j]) >= soglia:
-                    has_neighbor = True
-                # sud
-                elif abs(magnet[(i + 1) % Ly, j]) >= soglia:
-                    has_neighbor = True
-                # ovest
-                elif abs(magnet[i, (j - 1) % Lx]) >= soglia:
-                    has_neighbor = True
-                # est
-                elif abs(magnet[i, (j + 1) % Lx]) >= soglia:
-                    has_neighbor = True
-                if has_neighbor:
-                    dentro += density[i][j]
+def indici_aster(magnet, soglia):
+    L = magnet.shape[0]
+    dentro = np.zeros(L, dtype=np.int32)
+    for i in range(L):
+        if abs(magnet[i]) >= soglia:
+            has_neighbor = False
+            if abs(magnet[(i - 1) % L]) >= soglia:
+                has_neighbor = True
+            elif abs(magnet[(i + 1) % L]) >= soglia:
+                has_neighbor = True
+            if has_neighbor:
+                dentro[i] = 1
+        # else resta zero
     return dentro
 
 
 def evoluzione_dentro(magnet, soglia, tempo):
+    """Plotta il numero di siti con almeno un vicino sopra soglia nel tempo"""
     dentro = np.zeros(tempo)
     for t in range(tempo):
-        dentro[t] = dentro_aster(np.squeeze(magnet[t,:,:]), soglia)
-    plt.plot(dentro)
-    #plt.yscale('log')
+        dentro[t] = dentro_aster(magnet[t, :], soglia)
+    plt.figure()
+    plt.plot(np.arange(tempo), dentro)
+    plt.xlabel('Frame t')
+    plt.ylabel('Numero siti attivi')
+    plt.title('Evoluzione di "dentro" nel tempo')
+    plt.grid(True)
     plt.show()
-    return dentro
-
-def evoluzione_number(magnet, density, soglia, tempo):
-    dentro = np.zeros(tempo)
-    for t in range(tempo):
-        dentro[t] = heatmap_number(np.squeeze(magnet[t,:,:]), np.squeeze(density[t,:,:]), soglia)
-    plt.plot(dentro)
-    return dentro
 
 
-def caratterizzazione_aster(magnet, soglia):
-    Ly, Lx = magnet.shape
-    
-    asters = heatmap_aster(magnet,soglia)
-    big = np.tile(asters, (3, 3))
-    
-    labels_big = label(big, connectivity=2)
-    props = regionprops(labels_big)
-    
-    areas = []
-    centroids = []
-
-    # 4) Ciclo su ciascuna regione “reg” in props
-    for reg in props:
-        y0, x0 = reg.centroid
-    
-        if Ly <= y0 < 2*Ly and Lx <= x0 < 2*Lx:
-            # Calcolo area vera
-            coords_big = reg.coords 
-
-            # mappo ciascuna coordinata modulo 300
-            coords_mod = np.zeros_like(coords_big)
-            coords_mod[:,0] = coords_big[:,0] % Ly
-            coords_mod[:,1] = coords_big[:,1] % Lx
-
-            unique_mod = np.unique(coords_mod, axis=0)
-            area_true = unique_mod.shape[0]
-            
-            cy_mod = float(y0 % Ly)
-            cx_mod = float(x0 % Lx)
-
-            if area_true < 2: #per evitare un punto singolo
-                continue
-        
-            coordinates = (cy_mod, cx_mod)
-            areas.append(int(area_true))
-            centroids.append(coordinates)
-    
-    return areas, centroids
-
-def evoluzione_area(magnet, soglia):
-    tempo = magnet.shape[0]
-    aree = np.zeros(tempo)
-    
-    for t in range(tempo):
-        areas, _ = caratterizzazione_aster(np.squeeze(magnet[t, :, :]), soglia)
-        if areas is None:
-           aree[t] = 0
-        aree[t] = np.mean(np.array(areas))
-    return aree
-
-def asters_over_time(magnet, soglia):
-    """
-    Parametri
-    ---------
-    magnet : ndarray, shape (T, Ly, Lx)
-        Serie temporale del campo da analizzare.
-    soglia : float
-        Soglia assoluta per definire i cluster.
-
-    Ritorna
-    -------
-    num_clusters : ndarray, shape (T,)
-        Numero di cluster trovati in ciascun frame.
-    areas_list : list of ndarray
-        Per ogni frame t, array delle aree dei cluster.
-    centroids_list : list of list of (y, x)
-        Per ogni frame t, lista delle coordinate dei centroidi.
-    """
-    T, Ly, Lx = magnet.shape
-    num_clusters = np.zeros(T, dtype=int)
-    areas_list = []
-    centroids_list = []
-    for t in range(T):
-        areas, cents = caratterizzazione_aster(magnet[t], soglia)
-        num_clusters[t] = len(areas)
-        areas_list.append(np.array(areas, dtype=int))
-        centroids_list.append(cents)
-    return num_clusters, areas_list, centroids_list
-
-def sitimeno_sitipiu(magnet, soglia):
-    Ly, Lx = magnet.shape
-    
-    asters_finali = heatmap_aster(magnet, soglia) * magnet
-    
+def siti_meno_piu(magnet, soglia):
+    """Restituisce indici di siti in un profilo magnet con `indici_aster` separati per m<0 e m>0"""
+    L = magnet.shape[0]
+    mask = indici_aster(magnet, soglia)
     siti_meno = []
-
-    for i in range(Ly):
-        for j in range(Lx):
-            if asters_finali[i][j] < 0:
-               siti_meno.append((i,j))
-
     siti_piu = []
-
-    for i in range(Ly):
-        for j in range(Lx):
-            if asters_finali[i][j] > 0:
-                siti_piu.append((i,j))
-
+    for i in range(L):
+        if mask[i] == 1:
+            if magnet[i] < 0:
+                siti_meno.append(i)
+            elif magnet[i] > 0:
+                siti_piu.append(i)
     return siti_meno, siti_piu
+
+
+def densita_massima(magnet, density, soglia):
+    """Calcola per ogni frame la coppia massima di densità in siti consecutivi entrambi in `indici_aster`"""
+    T, L = magnet.shape
+    densita = np.zeros(T)
+
+    for t in range(T):
+        mask = indici_aster(magnet[t, :], soglia)
+        x = density[t, :]
+        max_temp = 0.0
+        for i in range(L):
+            if mask[i] and mask[(i + 1) % L]:
+                temp = x[i] + x[(i + 1) % L]
+                if temp > max_temp:
+                    max_temp = temp
+        densita[t] = max_temp
+
+    plt.figure()
+    plt.plot(np.arange(T), densita)
+    plt.xlabel('Frame t')
+    plt.ylabel('Massima densità in coppia attiva')
+    plt.title('Densità massima tra siti contigui attivi')
+    plt.grid(True)
+    plt.show()
+
+    return densita
+
+
+def conta_cluster(mask):
+    """
+    Conta quanti cluster contigui di 1 ci sono in mask,
+    assumendo condizioni periodiche.
+    Es: [0,1,1,0,1] → 2 cluster.
+    """
+    L = mask.shape[0]
+    clusters = 0
+    for i in range(L):
+        if mask[i] == 1 and mask[(i-1) % L] == 0:
+            clusters += 1
+    return clusters
+
+def tempo_2aster_definitivo(magnet, soglia):
+    """
+    Restituisce il più piccolo t0 a partire dal quale
+    ci sono SEMPRE due cluster (siti) aster fino alla fine.
+    Se non esiste, ritorna T (numero totale di frame).
+    """
+    T, _ = magnet.shape
+    has_two = np.zeros(T, dtype=bool)
+
+    for t in range(T):
+        mask = indici_aster(magnet[t, :], soglia)
+        n_clusters = conta_cluster(mask)
+        has_two[t] = (n_clusters == 1)
+
+    false_pos = np.where(~has_two)[0]
+    t0 = false_pos[-1] + 1
+    if t0 < T:
+        return t0
+    else:
+        print("Non ci sono mai 2 siti aster attivi.")
+        return T
+
+            
+def tempo_1aster(magnet, soglia):
+    """
+    Restituisce il più piccolo t0 a partire dal quale
+    ci sono sempre 2 siti aster (>= soglia) fino alla fine.
+    Se non esiste, ritorna T (il numero totale di frame).
+    """
+    T, _ = magnet.shape
+    
+    # Boolean array: True se in quel frame ci sono esattamente 2 siti
+    has_two = np.zeros(T, dtype=bool)
+    for t in range(T):
+        mask = indici_aster(magnet[t, :], soglia)
+        has_two[t] = (np.sum(mask) == 2)
+    
+    false_positions = np.where(~has_two)[0]
+    if false_positions.size == 0:
+        return 0
+    else:
+        t0 = false_positions[-1] + 1
+        if t0 < T:
+            return t0
+        else:
+            print("Non ci sono mai 2 siti aster attivi.")
+            return T
+
 
 def probabilities(magnet, density, T, gamma, D = 1, metodo_calcolo = 1, x_neo = 0, y_neo = 0):
     Ly, Lx = magnet.shape
@@ -494,7 +445,6 @@ def approssimazioni(magnet, density, soglia, T):
     return x_dentro, x_dentro_std, x_fuori, x_fuori_std
     
 
-
 def massimo_magnet(magnet):
     x = 0
     i_max = 0
@@ -506,113 +456,6 @@ def massimo_magnet(magnet):
     return x, i_max
 
 
-def tempo_una_banda(magnet, soglia, t0=0):
-    """
-    Trova il primo istante t ≥ t0 a partire dal quale c'è sempre esattamente
-    una sola banda (“aster”) attiva in ciascun frame.
-
-    Parametri
-    ---------
-    magnet : ndarray, shape (T, Ly, Lx)
-        Serie temporale dei campi di magnetizzazione.
-    soglia : float
-        Soglia assoluta su |magnet| per definire un sito “dentro” l’aster.
-    t0 : int, opzionale
-        Istante di partenza della ricerca (default=0).
-
-    Ritorna
-    -------
-    t_unica_banda : int
-        Il primo frame t ≥ t0 tale che
-          1) num_tot[t] == 1  (una sola banda)
-          2) num_tot[k] == 1 per tutti k ≥ t
-        Se non esiste, ritorna T (numero di frame).
-    """
-    # num_tot[t] = numero di bande in frame t
-    num_tot, _, _ = asters_over_time(magnet, soglia)
-
-    T = magnet.shape[0]
-    for t in range(t0, T):
-        # Condizione: esattamente 1 banda a t e sempre 1 da t in poi
-        if num_tot[t] == 1 and np.all(num_tot[t:] == 1):
-            return t
-    return T
-
-
-def tempo_colonna_piena(magnet, soglia, t0=0):
-    """
-    Dopo che il sistema si è ridotto a una sola banda (tempo t1),
-    trova il primo istante t ≥ t1 in cui esiste almeno una colonna
-    (asse x costante) completamente occupata dall’aster.
-
-    Parametri
-    ---------
-    magnet : ndarray, shape (T, Ly, Lx)
-        Serie temporale dei campi di magnetizzazione.
-    soglia : float
-        Soglia assoluta su |magnet| per definire un sito “dentro” l’aster.
-    t0 : int, opzionale
-        Istante di partenza per la ricerca della banda unica (default=0).
-
-    Ritorna
-    -------
-    t_colonna_piena : int
-        Il primo frame t ≥ t1 in cui esiste almeno una colonna i
-        tale che heatmap_aster(magnet[t], soglia)[:, i] sia tutta True.
-        Se non esiste, ritorna T (numero di frame).
-    """
-    T, Ly, Lx = magnet.shape
-
-    # 1) Trova t1: il tempo di comparsa di una sola banda
-    t1 = tempo_una_banda(magnet, soglia, t0)
-
-    # 2) A partire da t1, cerco il primo frame con una colonna interamente piena
-    for t in range(t1, T):
-        mappa = heatmap_aster(magnet[t], soglia)  # bool array (Ly, Lx)
-        # Controllo se c'è almeno una colonna piena
-        colonne_piene = np.all(mappa, axis=0)
-        if np.any(colonne_piene):
-            return t
-
-    return T
-
-def tempo_righe_non_vuote(magnet, soglia, t0=0):
-    """
-    Dopo che il sistema si è ridotto a una sola banda (tempo t1),
-    trova il primo istante t ≥ t1 in cui tutte le righe
-    contengono almeno un sito “dentro” l’aster.
-
-    Parametri
-    ---------
-    magnet : ndarray, shape (T, Ly, Lx)
-        Serie temporale dei campi di magnetizzazione.
-    soglia : float
-        Soglia assoluta su |magnet| per definire un sito “dentro” l’aster.
-    t0 : int, opzionale
-        Istante di partenza per la ricerca della banda unica (default=0).
-
-    Ritorna
-    -------
-    t_righe_non_vuote : int
-        Il primo frame t ≥ t1 in cui **ogni** riga j ha almeno un
-        elemento True in heatmap_aster(magnet[t], soglia)[j, :].
-        Se non esiste, ritorna T (numero di frame).
-    """
-    T, Ly, Lx = magnet.shape
-
-    # 1) Trova t1: il tempo in cui compare una sola banda
-    t1 = tempo_una_banda(magnet, soglia, t0)
-
-    # 2) A partire da t1, cerco il primo frame in cui tutte le righe sono non-vuote
-    for t in range(t1, T):
-        mappa = heatmap_aster(magnet[t], soglia)  # bool array (Ly, Lx)
-        # np.any(mappa, axis=1) è un array di lunghezza Ly: True se la riga ha almeno un True
-        righe_non_vuote = np.any(mappa, axis=1)
-        # Controllo che tutte le righe siano non-vuote
-        if np.all(righe_non_vuote):
-            return t
-
-    return T
 
 def build_log_indices(t_max, n_frames):
     """
@@ -694,102 +537,6 @@ def evoluzione_esterna(magnet, soglia):
         media[t] = media[t]/x
 
     plt.plot(np.arange(t_tot), media)
-
-
-def time_series_probabilities(magnet_ts, density_ts, soglia, T, gamma,
-                                 D=1.0, metodo_calcolo=1):
-    """
-    Calcola per ogni frame t:
-      – la probabilità media di flip +→− e −→+ nei siti “meno” dell’aster
-      – la probabilità media di flip +→− e −→+ nei siti “più” dell’aster
-    Restituisce quattro array (shape (T,2)):
-      mean_meno, sem_meno, mean_piu, sem_piu
-    dove [:,0] = P(+→−), [:,1] = P(−→+).
-    """
-    Tframes, Ly, Lx = magnet_ts.shape
-
-    mean_meno = np.zeros((Tframes, 2))
-    sem_meno  = np.zeros((Tframes, 2))
-    mean_piu  = np.zeros((Tframes, 2))
-    sem_piu   = np.zeros((Tframes, 2))
-
-    for t in range(Tframes):
-        m = np.squeeze(magnet_ts[t, :, :])
-        d = np.squeeze(density_ts[t, :, :])
-
-        # trova siti meno/più nell’aster in questo frame
-        siti_meno, siti_piu = sitimeno_sitipiu(m, soglia)
-
-        # array per raccogliere i flip rates
-        rates_meno = []
-        rates_piu  = []
-        # maschera dell’aster: True = dentro
-        where_ast = heatmap_aster(m, soglia)
-        m_aster = where_ast * m
-        d_aster = where_ast * d
-
-        # scorri i siti “meno”
-        for (i,j) in siti_meno:
-            if d_aster[i,j] != 0:
-                rates_meno.append(
-                    probabilities(m_aster, d_aster, T, gamma, D, metodo_calcolo,
-                                 x_neo=j, y_neo=i)
-                )
-        # e i siti “più”
-        for (i,j) in siti_piu:
-            if d_aster[i,j] != 0:
-                rates_piu.append(
-                    probabilities(m_aster, d_aster, T, gamma, D, metodo_calcolo,
-                                 x_neo=j, y_neo=i)
-                )
-
-        # converti in array Nx2
-        rates_meno = np.array(rates_meno)  # shape (N_m,2)
-        rates_piu  = np.array(rates_piu)   # shape (N_p,2)
-
-        # media e SEM per ciascuna colonna
-        if rates_meno.size > 0:
-            mean_meno[t] = rates_meno.mean(axis=0)
-            sem_meno[t]  = rates_meno.std(axis=0)/np.sqrt(rates_meno.shape[0])
-        else:
-            mean_meno[t] = np.nan; sem_meno[t] = np.nan
-
-        if rates_piu.size > 0:
-            mean_piu[t] = rates_piu.mean(axis=0)
-            sem_piu[t]  = rates_piu.std(axis=0)/np.sqrt(rates_piu.shape[0])
-        else:
-            mean_piu[t] = np.nan; sem_piu[t] = np.nan
-
-    return mean_meno, sem_meno, mean_piu, sem_piu
-
-
-def plot_time_series_probs(mean_meno, sem_meno, mean_piu, sem_piu, times):
-    """
-    Disegna quattro curve:
-      - P(+→−) siti meno e siti più
-      - P(−→+) siti meno e siti più
-    con bande di errore ±SEM.
-    """
-    plt.figure(figsize=(8,6))
-
-    # +→−
-    plt.errorbar(times, mean_meno[:,0], yerr=sem_meno[:,0],
-                 label='P(+→−) nei siti meno', marker='o', linestyle='-')
-    plt.errorbar(times, mean_piu[:,0],  yerr=sem_piu[:,0],
-                 label='P(+→−) nei siti più', marker='s', linestyle='--')
-
-    # −→+
-    plt.errorbar(times, mean_meno[:,1], yerr=sem_meno[:,1],
-                 label='P(−→+) nei siti meno', marker='^', linestyle='-')
-    plt.errorbar(times, mean_piu[:,1],  yerr=sem_piu[:,1],
-                 label='P(−→+) nei siti più', marker='v', linestyle='--')
-
-    plt.xlabel('Tempo')
-    plt.ylabel('Probabilità di flip')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.tight_layout()
-    plt.show()
 
 
 ## ANALISI PER BANDE
